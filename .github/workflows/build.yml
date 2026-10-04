@@ -20,9 +20,6 @@ name: Build
 # https://github.com/<repository>/releases/latest/download/<file> always
 # gives the latest build; the last five are kept.
 on:
-  push:
-    paths-ignore:
-      - "**.md"
   workflow_dispatch:
 
 concurrency:
