@@ -45,5 +45,7 @@ long halo_screen_commit(void);
 void halo_screen_ui_offset(unsigned char centered);
 /* the mouse in the menus (source/interface/ui_widget.c) */
 #include "halo_ui_pointer.h"
+/* what the game is doing, for the Android app (source/interface/ui_widget.c) */
+#include "halo_game_state.h"
 
 #endif
