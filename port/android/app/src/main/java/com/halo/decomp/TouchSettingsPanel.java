@@ -21,6 +21,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class TouchSettingsPanel extends ScrollView implements TouchControls.EditListener {
@@ -31,18 +32,18 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
     private final float density;
 
     private final TextView hint;
-    private final SeekBar sizeBar, opacityBar, lookBar;
-    private final TextView sizeValue, opacityValue, lookValue;
+    private final SeekBar sizeBar, opacityBar, buttonOpacityBar, lookBar;
+    private final TextView sizeValue, opacityValue, buttonOpacityValue, lookValue;
     private final CheckBox enableControlsCheck;
     private final TextView showPill, hapticsPill;
     private final TextView modePill, renamePill, iconPill, deletePill;
-    /** one tab for each set of controls (Game, Menu, Cutscene) */
     private final TextView[] setTabs = new TextView[TouchControls.SET_NAMES.length];
     private final TextView skipOnlyPill;
 
-    // Multi-state Key Binding Pills
+    // Multi-state Key Binding Sequence Containers
     private final LinearLayout stateBindingsContainer;
     private final TextView pressKeyPill, longPressKeyPill, toggleOnKeyPill, toggleOffKeyPill;
+    private final LinearLayout buttonOpacityRow;
     private boolean updating;
 
     public TouchSettingsPanel(Context context, TouchControls controls) {
@@ -50,12 +51,10 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         this.controls = controls;
         density = context.getResources().getDisplayMetrics().density;
 
-        // Ensure vertical scrolling behavior fits comfortably on landscape screens
         setFillViewport(true);
         setVerticalScrollBarEnabled(true);
         setOverScrollMode(OVER_SCROLL_IF_CONTENT_SCROLLS);
 
-        // Put the card background on the ScrollView itself so scrolling remains inside the card
         GradientDrawable card = new GradientDrawable();
         card.setColor(0xEB12181E);
         card.setCornerRadius(dp(16));
@@ -89,8 +88,6 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         layout.addView(header);
         makeHandle(title);
 
-        // The sets: each has its own controls, shown when the game is in
-        // that state (playing, a menu, a cutscene)
         LinearLayout tabs = new LinearLayout(context);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         for (int i = 0; i < setTabs.length; i++) {
@@ -112,7 +109,6 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         hint.setPadding(0, dp(4), 0, dp(6));
         layout.addView(hint);
 
-        // Master toggle: Enable/Disable On-Screen Controls
         enableControlsCheck = new CheckBox(context);
         enableControlsCheck.setText("Show On-Screen Controls");
         enableControlsCheck.setTextColor(0xFFFFFFFF);
@@ -122,13 +118,20 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
 
         sizeValue = text("", 11, false, 0xB3FFFFFF);
         opacityValue = text("", 11, false, 0xB3FFFFFF);
+        buttonOpacityValue = text("", 11, false, 0xB3FFFFFF);
         lookValue = text("", 11, false, 0xB3FFFFFF);
+
         sizeBar = slider(Math.round((TouchControls.SIZE_MAX - TouchControls.SIZE_MIN) * 100f));
         opacityBar = slider(Math.round((TouchControls.OPACITY_MAX - TouchControls.OPACITY_MIN) * 100f));
+        buttonOpacityBar = slider(Math.round((TouchControls.OPACITY_MAX - TouchControls.OPACITY_MIN) * 100f));
         lookBar = slider(Math.round((TouchControls.LOOK_MAX - TouchControls.LOOK_MIN) * 100f));
 
         layout.addView(row("Size", sizeBar, sizeValue));
-        layout.addView(row("Opacity", opacityBar, opacityValue));
+        layout.addView(row("Master Opacity", opacityBar, opacityValue));
+
+        buttonOpacityRow = row("Button Opacity", buttonOpacityBar, buttonOpacityValue);
+        layout.addView(buttonOpacityRow);
+
         layout.addView(row("Look speed", lookBar, lookValue));
 
         // Global toggles
@@ -168,11 +171,9 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         stateBindingsContainer.addView(rowKeys2, margin(0, dp(6), 0, 0));
         layout.addView(stateBindingsContainer, margin(0, dp(8), 0, 0));
 
-        // a cutscene's SKIP shows only while the cutscene can be skipped
         skipOnlyPill = pill("Only when skippable: On", false);
         layout.addView(skipOnlyPill, margin(0, dp(8), 0, 0));
 
-        // Custom action / rename label / choose icon / delete (Fully Responsive)
         LinearLayout customRow = new LinearLayout(context);
         customRow.setOrientation(LinearLayout.HORIZONTAL);
         customRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -182,7 +183,6 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         deletePill = pill("Delete", false);
         styleDangerPill(deletePill);
 
-        // Make icon pill dynamically shrink & truncate in the middle when filename is long
         iconPill.setSingleLine(true);
         iconPill.setEllipsize(TextUtils.TruncateAt.MIDDLE);
 
@@ -215,6 +215,13 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
             @Override
             void changed(int progress) {
                 controls.setOpacity(TouchControls.OPACITY_MIN + progress / 100f);
+                refreshValues();
+            }
+        });
+        buttonOpacityBar.setOnSeekBarChangeListener(new Changed() {
+            @Override
+            void changed(int progress) {
+                controls.setSelectedControlOpacity(TouchControls.OPACITY_MIN + progress / 100f);
                 refreshValues();
             }
         });
@@ -255,10 +262,10 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
             controls.save();
         });
 
-        pressKeyPill.setOnClickListener(v -> showKeycodePicker("press", "Standard Press / Tap Key"));
-        longPressKeyPill.setOnClickListener(v -> showKeycodePicker("long", "Long-Press / Hold Key"));
-        toggleOnKeyPill.setOnClickListener(v -> showKeycodePicker("toggle_on", "Toggle ON Key"));
-        toggleOffKeyPill.setOnClickListener(v -> showKeycodePicker("toggle_off", "Toggle OFF Key"));
+        pressKeyPill.setOnClickListener(v -> showSequenceManagerDialog("press", "Configure Press / Tap Sequence"));
+        longPressKeyPill.setOnClickListener(v -> showSequenceManagerDialog("long", "Configure Hold Sequence"));
+        toggleOnKeyPill.setOnClickListener(v -> showSequenceManagerDialog("toggle_on", "Configure Toggle ON Sequence"));
+        toggleOffKeyPill.setOnClickListener(v -> showSequenceManagerDialog("toggle_off", "Configure Toggle OFF Sequence"));
 
         renamePill.setOnClickListener(v -> showRenameDialog());
         iconPill.setOnClickListener(v -> showIconOrStickDialog());
@@ -269,7 +276,6 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        // Constrain height so the panel never exceeds 86% of the screen height in landscape
         DisplayMetrics dm = getContext().getResources().getDisplayMetrics();
         int maxHeight = (int) (dm.heightPixels * 0.86f);
         int constrainedHeight = MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST);
@@ -387,27 +393,60 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
             .show();
     }
 
-    private void showKeycodePicker(final String stateType, String title) {
+    private void showSequenceManagerDialog(final String stateType, String title) {
+        List<Integer> currentKeys = new ArrayList<>(controls.getSelectedKeys(stateType));
+        String currentSeqStr = formatSequence(currentKeys);
+
+        String[] options = {
+            "Append Key To Sequence...",
+            "Set Single Key (Replace)",
+            "Enter Raw Comma-Separated Keycodes...",
+            "Clear / Set to None"
+        };
+
+        new AlertDialog.Builder(getContext())
+            .setTitle(title + "\n(Current: " + currentSeqStr + ")")
+            .setItems(options, (dialog, which) -> {
+                if (which == 0) {
+                    showAppendKeyPicker(stateType, currentKeys, false);
+                } else if (which == 1) {
+                    showAppendKeyPicker(stateType, new ArrayList<>(), true);
+                } else if (which == 2) {
+                    showRawKeycodesDialog(stateType, currentKeys);
+                } else {
+                    currentKeys.clear();
+                    controls.setSelectedKeys(stateType, currentKeys);
+                    controls.save();
+                    refresh();
+                }
+            })
+            .setNegativeButton("Done", null)
+            .show();
+    }
+
+    private void showAppendKeyPicker(final String stateType, final List<Integer> currentKeys, boolean replaceAll) {
         final String[] names = {
-            "None (Disabled)", "Fire (Mouse Left)", "Jump (Space)", "Reload (R)",
-            "Melee (F)", "Crouch (C)", "Grenade (G)", "Zoom (Z)", "Switch Weapon (1)",
+            "Fire (Mouse Left)", "Jump / Accept (Space)", "Accept / Enter (Return)", "Action / Use / Menu X (E)",
+            "Melee (F)", "Reload (R)", "Crouch (C)", "Grenade (G)", "Zoom (Z)", "Switch Weapon (1)",
             "Switch Grenade (X)", "Flashlight (Q)", "Pause Menu (Esc)", "Show Scores (Tab)",
             "D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right", "Custom Keycode..."
         };
         final int[] codes = {
-            TouchControls.NONE, TouchControls.FIRE, KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_R,
-            KeyEvent.KEYCODE_F, KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_G, KeyEvent.KEYCODE_Z, KeyEvent.KEYCODE_1,
+            TouchControls.FIRE, KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_E,
+            KeyEvent.KEYCODE_F, KeyEvent.KEYCODE_R, KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_G, KeyEvent.KEYCODE_Z, KeyEvent.KEYCODE_1,
             KeyEvent.KEYCODE_X, KeyEvent.KEYCODE_Q, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_TAB,
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, -99
         };
 
         new AlertDialog.Builder(getContext())
-            .setTitle(title)
+            .setTitle(replaceAll ? "Select Key" : "Select Key to Append")
             .setItems(names, (dialog, which) -> {
                 if (codes[which] == -99) {
-                    showCustomKeycodeDialog(stateType);
+                    showCustomSingleKeycodeDialog(stateType, currentKeys, replaceAll);
                 } else {
-                    controls.setSelectedKey(stateType, codes[which]);
+                    if (replaceAll) currentKeys.clear();
+                    currentKeys.add(codes[which]);
+                    controls.setSelectedKeys(stateType, currentKeys);
                     controls.save();
                     refresh();
                 }
@@ -415,21 +454,55 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
             .show();
     }
 
-    private void showCustomKeycodeDialog(final String stateType) {
+    private void showCustomSingleKeycodeDialog(final String stateType, final List<Integer> currentKeys, boolean replaceAll) {
         EditText input = new EditText(getContext());
         input.setInputType(InputType.TYPE_CLASS_NUMBER);
-        input.setHint("Android KeyEvent code (e.g. 62)");
+        input.setHint("Android KeyEvent code (e.g. 66 for Enter)");
 
         new AlertDialog.Builder(getContext())
             .setTitle("Enter Keycode Number")
             .setView(input)
-            .setPositiveButton("Set", (dialog, which) -> {
+            .setPositiveButton("Add", (dialog, which) -> {
                 try {
                     int val = Integer.parseInt(input.getText().toString().trim());
-                    controls.setSelectedKey(stateType, val);
+                    if (replaceAll) currentKeys.clear();
+                    currentKeys.add(val);
+                    controls.setSelectedKeys(stateType, currentKeys);
                     controls.save();
                     refresh();
                 } catch (NumberFormatException ignored) {}
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showRawKeycodesDialog(final String stateType, final List<Integer> currentKeys) {
+        EditText input = new EditText(getContext());
+        StringBuilder currentStr = new StringBuilder();
+        for (int i = 0; i < currentKeys.size(); i++) {
+            if (i > 0) currentStr.append(", ");
+            currentStr.append(currentKeys.get(i));
+        }
+        input.setText(currentStr.toString());
+        input.setHint("e.g. 62, 66 (Space then Enter)");
+
+        new AlertDialog.Builder(getContext())
+            .setTitle("Enter Keycode Sequence")
+            .setView(input)
+            .setPositiveButton("Save", (dialog, which) -> {
+                String str = input.getText().toString().trim();
+                List<Integer> parsed = new ArrayList<>();
+                if (!str.isEmpty()) {
+                    for (String part : str.split(",")) {
+                        try {
+                            int code = Integer.parseInt(part.trim());
+                            if (code != TouchControls.NONE) parsed.add(code);
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+                controls.setSelectedKeys(stateType, parsed);
+                controls.save();
+                refresh();
             })
             .setNegativeButton("Cancel", null)
             .show();
@@ -473,8 +546,17 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         if (key == TouchControls.FIRE) return "FIRE";
         if (key == TouchControls.EDIT) return "EDIT";
         String name = KeyEvent.keyCodeToString(key);
-        // KEYCODE_DPAD_UP -> DPAD_UP; a code it does not know stays a number
         return name.startsWith("KEYCODE_") ? name.substring(8) : "Key " + key;
+    }
+
+    private String formatSequence(List<Integer> list) {
+        if (list == null || list.isEmpty()) return "None";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            if (i > 0) sb.append(" \u2192 ");
+            sb.append(formatKey(list.get(i)));
+        }
+        return sb.toString();
     }
 
     private void refresh() {
@@ -489,10 +571,17 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         hint.setText(has ? sel.name + ": drag to move or tap options below"
                          : "Editing the " + TouchControls.SET_NAMES[set].toLowerCase()
                            + " controls. Tap a control to select it, or drag it.");
+
         sizeBar.setEnabled(has);
         sizeBar.setAlpha(has ? 1f : 0.4f);
         sizeBar.setProgress(Math.round((controls.selectedScale() - TouchControls.SIZE_MIN) * 100f));
+
         opacityBar.setProgress(Math.round((controls.opacity() - TouchControls.OPACITY_MIN) * 100f));
+
+        buttonOpacityRow.setVisibility(has ? VISIBLE : GONE);
+        buttonOpacityBar.setEnabled(has);
+        buttonOpacityBar.setProgress(Math.round((controls.selectedControlOpacity() - TouchControls.OPACITY_MIN) * 100f));
+
         lookBar.setProgress(Math.round((controls.lookSpeed() - TouchControls.LOOK_MIN) * 100f));
 
         boolean canShow = has && !controls.selectedLocked();
@@ -531,10 +620,10 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
                 toggleOffKeyPill.setVisibility(VISIBLE);
             }
 
-            pressKeyPill.setText("Press: " + formatKey(sel.pressKey));
-            longPressKeyPill.setText("Hold: " + formatKey(sel.longPressKey));
-            toggleOnKeyPill.setText("On: " + formatKey(sel.toggleOnKey));
-            toggleOffKeyPill.setText("Off: " + formatKey(sel.toggleOffKey));
+            pressKeyPill.setText("Press: " + formatSequence(sel.pressKeys));
+            longPressKeyPill.setText("Hold: " + formatSequence(sel.longPressKeys));
+            toggleOnKeyPill.setText("On: " + formatSequence(sel.toggleOnKeys));
+            toggleOffKeyPill.setText("Off: " + formatSequence(sel.toggleOffKeys));
 
             String iconName = (sel.customIconFile != null && !sel.customIconFile.isEmpty())
                     ? sel.customIconFile : (sel.icon != null ? "Icon" : "None");
@@ -568,6 +657,8 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         sizeValue.setText(controls.selectedName() != null
                 ? Math.round(controls.selectedScale() * 100f) + "%" : "");
         opacityValue.setText(Math.round(controls.opacity() * 100f) + "%");
+        buttonOpacityValue.setText(controls.selectedName() != null
+                ? Math.round(controls.selectedControlOpacity() * 100f) + "%" : "");
         lookValue.setText(Math.round(controls.lookSpeed() * 100f) + "%");
     }
 
@@ -673,7 +764,7 @@ public class TouchSettingsPanel extends ScrollView implements TouchControls.Edit
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         TextView name = text(label, 12, false, 0xFFFFFFFF);
-        row.addView(name, new LinearLayout.LayoutParams(dp(78), LinearLayout.LayoutParams.WRAP_CONTENT));
+        row.addView(name, new LinearLayout.LayoutParams(dp(95), LinearLayout.LayoutParams.WRAP_CONTENT));
         row.addView(bar, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         value.setGravity(Gravity.END);
         row.addView(value, new LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.WRAP_CONTENT));
