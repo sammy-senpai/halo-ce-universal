@@ -101,6 +101,9 @@ the GPU to finish the work last fenced for a slot */
 void host_gl_fence_frame(unsigned int slot);
 void host_gl_wait_frame(unsigned int slot);
 
+/* what the game is doing, for the app's touch controls (halo_game_state.h) */
+void host_set_game_state(unsigned int flags);
+
 /* ---------- Android */
 
 /* the storage directories the port uses, copied into buffer */
