@@ -100,3 +100,12 @@ void backtrace_symbols_fd(void *const *frames, int size, int fd)
 	(void)size;
 	(void)fd;
 }
+
+/* what the game is doing, for the app's touch controls
+(port/linux/include/halo_game_state.h) */
+void halo_game_state_update(unsigned int flags);
+
+void halo_game_state_update(unsigned int flags)
+{
+	host_set_game_state(flags);
+}
