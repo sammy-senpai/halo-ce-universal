@@ -64,15 +64,11 @@ public class TouchControls extends View {
     public static final long LONG_PRESS_TIMEOUT_MS = 300;
     private static final float PRESS_MS = 80f;
     private static final float SNAP_DP = 4f;
-    /** a key is held at least this long: the game looks at its input 30
-     *  times a second, and a quicker tap would fall between two looks */
     private static final long MIN_HOLD_MS = 50;
+    private static final long SEQ_STEP_DELAY_MS = 35;
     private static final float FADE_MS = 160f;
-    /** how often the game's state is asked for */
     private static final long STATE_POLL_MS = 50;
 
-    /** the control sets: each has its own buttons, layout, keys and icons,
-     *  and shows when the game is in the state it is for (GameState) */
     public static final int SET_GAME = 0, SET_MENU = 1, SET_CUTSCENE = 2;
     private static final int SET_COUNT = 3;
     private static final String[] SET_IDS = { "game", "menu", "cutscene" };
@@ -101,20 +97,20 @@ public class TouchControls extends View {
         public int anchor;
         public float defDx, defDy, defScale, radius;
         public boolean defVisible, locked, custom;
-        /** the set it is in (its id) */
         public String setId = "game";
-        /** shown only while the cutscene can be skipped (SKIP) */
         public boolean onlyWhenSkippable, defOnlySkippable;
 
         public int behaviorMode = MODE_STANDARD;
-        public int pressKey = NONE;
-        public int longPressKey = NONE;
-        public int toggleOnKey = NONE;
-        public int toggleOffKey = NONE;
+
+        public final List<Integer> pressKeys = new ArrayList<>();
+        public final List<Integer> longPressKeys = new ArrayList<>();
+        public final List<Integer> toggleOnKeys = new ArrayList<>();
+        public final List<Integer> toggleOffKeys = new ArrayList<>();
 
         public String customIconFile = "";
-        public String customKnobFile = ""; // Used if type == TYPE_STICK
+        public String customKnobFile = "";
         public float dx, dy, scale = 1f;
+        public float opacity = -1f;
         public boolean visible;
 
         // Runtime state
@@ -125,6 +121,7 @@ public class TouchControls extends View {
         public boolean longPressTriggered = false;
         public Runnable pendingLongPress = null;
         public Runnable pendingRelease = null;
+        public final List<Runnable> activeSequenceRunnables = new ArrayList<>();
         public long downAt;
         public Drawable icon;
 
@@ -134,8 +131,10 @@ public class TouchControls extends View {
             this.name = name;
             this.label = label;
             this.type = type;
-            this.pressKey = defaultKey;
-            this.toggleOnKey = defaultKey;
+            if (defaultKey != NONE) {
+                this.pressKeys.add(defaultKey);
+                this.toggleOnKeys.add(defaultKey);
+            }
             this.anchor = anchor;
             this.defDx = dx;
             this.defDy = dy;
@@ -153,18 +152,18 @@ public class TouchControls extends View {
             scale = defScale;
             visible = defVisible;
             onlyWhenSkippable = defOnlySkippable;
+            opacity = -1f;
             toggledState = false;
             longPressTriggered = false;
             pendingLongPress = null;
             pendingRelease = null;
+            activeSequenceRunnables.clear();
         }
     }
 
-    /** one set of controls: the game's, a menu's, a cutscene's */
     private static final class ControlSet {
         final int index;
         final String id;
-        /** a drag on the free side of the screen turns the view (the game's) */
         final boolean look;
         final List<Control> controls = new ArrayList<>();
         Control stick, editButton;
@@ -177,8 +176,6 @@ public class TouchControls extends View {
     }
 
     private final ControlSet[] sets = new ControlSet[SET_COUNT];
-    /** the set in use, and its controls, stick and EDIT: the game's state
-     *  chooses it, and so does the editor (editSet) */
     private int activeSet = SET_GAME;
     private List<Control> controls;
     private Control stick;
@@ -214,10 +211,8 @@ public class TouchControls extends View {
     private boolean haptics = true;
     private boolean controlsEnabled = true;
 
-    // what the game is doing
     private int situation = GameState.GAMEPLAY;
     private boolean skippable;
-    /** 0 hidden, 1 shown, eased: sets fade in, and out for a loading map */
     private float uiAlpha = 1f;
     private long lastFade;
     private int editSet = SET_GAME;
@@ -276,17 +271,11 @@ public class TouchControls extends View {
         setHapticFeedbackEnabled(true);
     }
 
-    // ---------- the sets' default controls
-
     private void setupAllDefaults() {
         for (ControlSet set : sets)
             buildDefaults(set);
     }
 
-    /*
-     * Positions are in dp inward from the anchor's two edges, on an
-     * 800 x 360 dp phone.
-     */
     private void buildDefaults(ControlSet set) {
         set.controls.clear();
         set.stick = null;
@@ -294,60 +283,76 @@ public class TouchControls extends View {
 
         switch (set.index) {
             case SET_MENU:
-                // the D-pad, left; the four face buttons, right (A at the
-                // bottom, B right, X left, Y top, as on the controller)
-                addDefault(set, "dpad_up",    "D-pad up",    "UP",    TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_UP,    BL, 118, 170, 1.00f, 26, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_DPAD_UP,    0, KeyEvent.KEYCODE_DPAD_UP,    0);
-                addDefault(set, "dpad_down",  "D-pad down",  "DOWN",  TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_DOWN,  BL, 118,  58, 1.00f, 26, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_DPAD_DOWN,  0, KeyEvent.KEYCODE_DPAD_DOWN,  0);
-                addDefault(set, "dpad_left",  "D-pad left",  "LEFT",  TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_LEFT,  BL,  60, 114, 1.00f, 26, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_DPAD_LEFT,  0, KeyEvent.KEYCODE_DPAD_LEFT,  0);
-                addDefault(set, "dpad_right", "D-pad right", "RIGHT", TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_RIGHT, BL, 176, 114, 1.00f, 26, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_DPAD_RIGHT, 0, KeyEvent.KEYCODE_DPAD_RIGHT, 0);
-                addDefault(set, "ok",         "Accept (A)",  "OK",    TYPE_BUTTON, KeyEvent.KEYCODE_ENTER,      BR, 118,  58, 1.00f, 28, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_ENTER,      0, KeyEvent.KEYCODE_ENTER,      0);
-                addDefault(set, "cancel",     "Back (B)",    "BACK",  TYPE_BUTTON, KeyEvent.KEYCODE_BACK,          BR,  58, 114, 1.00f, 28, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_BACK,          0, KeyEvent.KEYCODE_BACK,          0);
-                addDefault(set, "x",          "X button",    "X",     TYPE_BUTTON, KeyEvent.KEYCODE_E,          BR, 178, 114, 1.00f, 28, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_E,          0, KeyEvent.KEYCODE_E,          0);
-                addDefault(set, "y",          "Y button",    "Y",     TYPE_BUTTON, KeyEvent.KEYCODE_TAB,        BR, 118, 170, 1.00f, 28, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_TAB,        0, KeyEvent.KEYCODE_TAB,        0);
-                addDefault(set, "start",      "Start",       "START", TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE,     TR,  36,  36, 1.00f, 20, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_ESCAPE,     0, KeyEvent.KEYCODE_ESCAPE,     0);
-                addDefault(set, "edit",       "Edit button", "EDIT",  TYPE_BUTTON, EDIT,                        TL,  30,  36, 1.00f, 20, true,  true,  MODE_STANDARD, EDIT,                        0, EDIT,                        0);
+                addDefault(set, "dpad_up",    "D-pad up",    "UP",    TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_UP,    BL, 118, 170, 1.00f, 26, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_DPAD_UP),    keys(), keys(KeyEvent.KEYCODE_DPAD_UP),    keys());
+                addDefault(set, "dpad_down",  "D-pad down",  "DOWN",  TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_DOWN,  BL, 118,  58, 1.00f, 26, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_DPAD_DOWN),  keys(), keys(KeyEvent.KEYCODE_DPAD_DOWN),  keys());
+                addDefault(set, "dpad_left",  "D-pad left",  "LEFT",  TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_LEFT,  BL,  60, 114, 1.00f, 26, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_DPAD_LEFT),  keys(), keys(KeyEvent.KEYCODE_DPAD_LEFT),  keys());
+                addDefault(set, "dpad_right", "D-pad right", "RIGHT", TYPE_BUTTON, KeyEvent.KEYCODE_DPAD_RIGHT, BL, 176, 114, 1.00f, 26, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_DPAD_RIGHT), keys(), keys(KeyEvent.KEYCODE_DPAD_RIGHT), keys());
+                addDefault(set, "ok",         "Accept (A)",  "OK",    TYPE_BUTTON, KeyEvent.KEYCODE_SPACE,      BR, 118,  58, 1.00f, 28, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_SPACE),      keys(), keys(KeyEvent.KEYCODE_SPACE),      keys());
+                addDefault(set, "cancel",     "Back (B)",    "BACK",  TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE,     BR,  58, 114, 1.00f, 28, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_ESCAPE),     keys(), keys(KeyEvent.KEYCODE_ESCAPE),     keys());
+                addDefault(set, "x",          "X button",    "X",     TYPE_BUTTON, KeyEvent.KEYCODE_E,          BR, 178, 114, 1.00f, 28, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_E),          keys(), keys(KeyEvent.KEYCODE_E),          keys());
+                addDefault(set, "y",          "Y button",    "Y",     TYPE_BUTTON, KeyEvent.KEYCODE_TAB,        BR, 118, 170, 1.00f, 28, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_TAB),        keys(), keys(KeyEvent.KEYCODE_TAB),        keys());
+                addDefault(set, "start",      "Start",       "START", TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE,     TR,  36,  36, 1.00f, 20, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_ESCAPE),     keys(), keys(KeyEvent.KEYCODE_ESCAPE),     keys());
+                addDefault(set, "edit",       "Edit button", "EDIT",  TYPE_BUTTON, EDIT,                        TL,  30,  36, 1.00f, 20, true,  true,  MODE_STANDARD, keys(EDIT),                        keys(), keys(EDIT),                        keys());
                 break;
 
             case SET_CUTSCENE: {
-                Control skip = addDefault(set, "skip", "Skip cutscene", "SKIP", TYPE_BUTTON, KeyEvent.KEYCODE_SPACE, TR, 88, 36, 1.00f, 20, true, false, MODE_STANDARD, KeyEvent.KEYCODE_SPACE, 0, KeyEvent.KEYCODE_SPACE, 0);
+                Control skip = addDefault(set, "skip", "Skip cutscene", "SKIP", TYPE_BUTTON, KeyEvent.KEYCODE_SPACE, TR, 88, 36, 1.00f, 20, true, false, MODE_STANDARD, keys(KeyEvent.KEYCODE_SPACE), keys(), keys(KeyEvent.KEYCODE_SPACE), keys());
                 skip.onlyWhenSkippable = skip.defOnlySkippable = true;
-                addDefault(set, "menu", "Pause menu",  "MENU", TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE, TR,  36, 36, 1.00f, 20, true,  false, MODE_STANDARD, KeyEvent.KEYCODE_ESCAPE, 0, KeyEvent.KEYCODE_ESCAPE, 0);
-                addDefault(set, "edit", "Edit button", "EDIT", TYPE_BUTTON, EDIT,                    TL,  30, 36, 1.00f, 20, true,  true,  MODE_STANDARD, EDIT,                    0, EDIT,                    0);
+                addDefault(set, "menu", "Pause menu",  "MENU", TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE, TR,  36, 36, 1.00f, 20, true,  false, MODE_STANDARD, keys(KeyEvent.KEYCODE_ESCAPE), keys(), keys(KeyEvent.KEYCODE_ESCAPE), keys());
+                addDefault(set, "edit", "Edit button", "EDIT", TYPE_BUTTON, EDIT,                    TL,  30, 36, 1.00f, 20, true,  true,  MODE_STANDARD, keys(EDIT),                    keys(), keys(EDIT),                    keys());
                 break;
             }
 
             default:
-                addDefault(set, "fire",    "Fire",           "FIRE",    TYPE_BUTTON, FIRE,                    BR,  92,  92, 1.00f, 44, true,  false, MODE_STANDARD,     FIRE, 0, FIRE, 0);
-                addDefault(set, "zoom",    "Zoom",           "ZOOM",    TYPE_BUTTON, KeyEvent.KEYCODE_Z,      BR,  60, 172, 1.00f, 28, true,  false, MODE_STANDARD,     54,   0, 54,   0);
-                addDefault(set, "jump",    "Jump",           "JUMP",    TYPE_BUTTON, KeyEvent.KEYCODE_SPACE,  BR, 260,  50, 1.00f, 26, true,  false, MODE_STANDARD,     62,   0, 62,   0);
-                addDefault(set, "melee",   "Melee",          "MELEE",   TYPE_BUTTON, KeyEvent.KEYCODE_F,      BR, 176, 116, 1.00f, 28, true,  false, MODE_STANDARD,     34,   0, 34,   0);
-                addDefault(set, "reload",  "Reload / use",   "RELOAD",  TYPE_BUTTON, KeyEvent.KEYCODE_R,      BR, 160,  44, 1.00f, 27, true,  false, MODE_STANDARD,     46,   0, 46,   0);
-                addDefault(set, "swap",    "Switch weapon",  "SWAP",    TYPE_BUTTON, KeyEvent.KEYCODE_1,    BR, 132, 172, 1.00f, 24, true,  false, MODE_TAP_AND_HOLD, 8,  33, 8,   0);
-                addDefault(set, "stick",   "Move stick",     "MOVE",    TYPE_STICK,  0,                       BL, 112, 104, 1.00f, 58, true,  false, MODE_STANDARD,      0,   0,  0,   0);
-                addDefault(set, "grenade", "Grenade",        "GRENADE", TYPE_BUTTON, KeyEvent.KEYCODE_G,      BL,  52, 252, 1.00f, 30, true,  false, MODE_STANDARD,     35,   0, 35,   0);
-                addDefault(set, "crouch",  "Crouch",         "CROUCH",  TYPE_BUTTON, KeyEvent.KEYCODE_C,      BL, 214,  50, 1.00f, 26, true,  false, MODE_TOGGLE,       31,   0, 31,   0);
-                addDefault(set, "gtype",   "Grenade type",   "TYPE",    TYPE_BUTTON, KeyEvent.KEYCODE_X,      BL, 116, 220, 1.00f, 20, true,  false, MODE_STANDARD,     52,   0, 52,   0);
-                addDefault(set, "light",   "Flashlight",     "LIGHT",   TYPE_BUTTON, KeyEvent.KEYCODE_Q,      TR,  88,  36, 1.00f, 20, true,  false, MODE_STANDARD,     45,   0, 45,   0);
-                addDefault(set, "menu",    "Pause menu",     "MENU",    TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE, TR,  36,  36, 1.00f, 20, true,  false, MODE_STANDARD,    111,   0, 111,  0);
-                addDefault(set, "edit",    "Edit button",    "EDIT",    TYPE_BUTTON, EDIT,                    TL,  30,  36, 1.00f, 20, true,  true,  MODE_STANDARD,     -2,   0, -2,   0);
-                addDefault(set, "fire2",   "Second fire",    "FIRE",    TYPE_BUTTON, FIRE,                    BL, 144, 320, 1.00f, 32, false, false, MODE_STANDARD,     FIRE, 0, FIRE, 0);
-                addDefault(set, "back",    "Back / scores",  "BACK",    TYPE_BUTTON, KeyEvent.KEYCODE_F1,     TR, 140,  36, 1.00f, 20, true,  false, MODE_STANDARD,    131,   0, 131,  0);
+                addDefault(set, "fire",    "Fire",           "FIRE",    TYPE_BUTTON, FIRE,                    BR,  92,  92, 1.00f, 44, true,  false, MODE_STANDARD,     keys(FIRE), keys(), keys(FIRE), keys());
+                addDefault(set, "zoom",    "Zoom",           "ZOOM",    TYPE_BUTTON, KeyEvent.KEYCODE_Z,      BR,  60, 172, 1.00f, 28, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_Z), keys(), keys(KeyEvent.KEYCODE_Z), keys());
+                addDefault(set, "jump",    "Jump",           "JUMP",    TYPE_BUTTON, KeyEvent.KEYCODE_SPACE,  BR, 260,  50, 1.00f, 26, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_SPACE), keys(), keys(KeyEvent.KEYCODE_SPACE), keys());
+                addDefault(set, "melee",   "Melee",          "MELEE",   TYPE_BUTTON, KeyEvent.KEYCODE_F,      BR, 176, 116, 1.00f, 28, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_F), keys(), keys(KeyEvent.KEYCODE_F), keys());
+                addDefault(set, "reload",  "Reload / use",   "RELOAD",  TYPE_BUTTON, KeyEvent.KEYCODE_R,      BR, 160,  44, 1.00f, 27, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_R), keys(), keys(KeyEvent.KEYCODE_R), keys());
+                addDefault(set, "swap",    "Switch weapon",  "SWAP",    TYPE_BUTTON, KeyEvent.KEYCODE_1,      BR, 132, 172, 1.00f, 24, true,  false, MODE_TAP_AND_HOLD, keys(KeyEvent.KEYCODE_1), keys(KeyEvent.KEYCODE_E), keys(KeyEvent.KEYCODE_1), keys());
+                addDefault(set, "stick",   "Move stick",     "MOVE",    TYPE_STICK,  0,                       BL, 112, 104, 1.00f, 58, true,  false, MODE_STANDARD,     keys(), keys(), keys(), keys());
+                addDefault(set, "grenade", "Grenade",        "GRENADE", TYPE_BUTTON, KeyEvent.KEYCODE_G,      BL,  52, 252, 1.00f, 30, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_G), keys(), keys(KeyEvent.KEYCODE_G), keys());
+                addDefault(set, "crouch",  "Crouch",         "CROUCH",  TYPE_BUTTON, KeyEvent.KEYCODE_C,      BL, 214,  50, 1.00f, 26, true,  false, MODE_TOGGLE,       keys(KeyEvent.KEYCODE_C), keys(), keys(KeyEvent.KEYCODE_C), keys());
+                addDefault(set, "gtype",   "Grenade type",   "TYPE",    TYPE_BUTTON, KeyEvent.KEYCODE_X,      BL, 116, 220, 1.00f, 20, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_X), keys(), keys(KeyEvent.KEYCODE_X), keys());
+                addDefault(set, "light",   "Flashlight",     "LIGHT",   TYPE_BUTTON, KeyEvent.KEYCODE_Q,      TR,  88,  36, 1.00f, 20, true,  false, MODE_STANDARD,     keys(KeyEvent.KEYCODE_Q), keys(), keys(KeyEvent.KEYCODE_Q), keys());
+                addDefault(set, "menu",    "Pause menu",     "MENU",    TYPE_BUTTON, KeyEvent.KEYCODE_ESCAPE, TR,  36,  36, 1.00f, 20, true,  false, MODE_STANDARD,    keys(KeyEvent.KEYCODE_ESCAPE), keys(), keys(KeyEvent.KEYCODE_ESCAPE), keys());
+                addDefault(set, "edit",    "Edit button",    "EDIT",    TYPE_BUTTON, EDIT,                    TL,  30,  36, 1.00f, 20, true,  true,  MODE_STANDARD,     keys(EDIT), keys(), keys(EDIT), keys());
+                addDefault(set, "fire2",   "Second fire",    "FIRE",    TYPE_BUTTON, FIRE,                    BL, 144, 320, 1.00f, 32, false, false, MODE_STANDARD,     keys(FIRE), keys(), keys(FIRE), keys());
+                addDefault(set, "back",    "Back / scores",  "BACK",    TYPE_BUTTON, KeyEvent.KEYCODE_F1,     TR, 140,  36, 1.00f, 20, true,  false, MODE_STANDARD,    keys(KeyEvent.KEYCODE_F1), keys(), keys(KeyEvent.KEYCODE_F1), keys());
+
+                // Xbox-style cluster mapped to true PC gameplay actions
+                addDefault(set, "a", "A (Jump)",       "A", TYPE_BUTTON, KeyEvent.KEYCODE_SPACE, BR,  76, 240, 0.60f, 28, true, false, MODE_STANDARD, keys(KeyEvent.KEYCODE_SPACE), keys(), keys(KeyEvent.KEYCODE_SPACE), keys());
+                addDefault(set, "b", "B (Melee)",      "B", TYPE_BUTTON, KeyEvent.KEYCODE_F,     BR,  44, 272, 0.60f, 28, true, false, MODE_STANDARD, keys(KeyEvent.KEYCODE_F),     keys(), keys(KeyEvent.KEYCODE_F),     keys());
+                addDefault(set, "x", "X (Action/Use)", "X", TYPE_BUTTON, KeyEvent.KEYCODE_E,     BR, 108, 272, 0.60f, 28, true, false, MODE_STANDARD, keys(KeyEvent.KEYCODE_E),     keys(), keys(KeyEvent.KEYCODE_E),     keys());
+                addDefault(set, "y", "Y (Switch)",     "Y", TYPE_BUTTON, KeyEvent.KEYCODE_1,     BR,  76, 304, 0.60f, 28, true, false, MODE_STANDARD, keys(KeyEvent.KEYCODE_1),     keys(), keys(KeyEvent.KEYCODE_1),     keys());
                 break;
         }
         set.stick = find(set, "stick");
         set.editButton = find(set, "edit");
     }
 
+    private static List<Integer> keys(int... vals) {
+        List<Integer> list = new ArrayList<>();
+        if (vals != null) {
+            for (int v : vals) list.add(v);
+        }
+        return list;
+    }
+
     private Control addDefault(ControlSet set, String id, String name, String label, int type, int key,
                                int anchor, float dx, float dy, float scale, float radius, boolean visible, boolean locked,
-                               int mode, int pressKey, int longKey, int toggleOn, int toggleOff) {
+                               int mode, List<Integer> pressKeys, List<Integer> longKeys, List<Integer> toggleOn, List<Integer> toggleOff) {
         Control c = new Control(id, name, label, type, key, anchor, dx, dy, scale, radius, visible, locked, false);
         c.setId = set.id;
         c.behaviorMode = mode;
-        c.pressKey = pressKey;
-        c.longPressKey = longKey;
-        c.toggleOnKey = toggleOn;
-        c.toggleOffKey = toggleOff;
+        c.pressKeys.clear();
+        c.pressKeys.addAll(pressKeys);
+        c.longPressKeys.clear();
+        c.longPressKeys.addAll(longKeys);
+        c.toggleOnKeys.clear();
+        c.toggleOnKeys.addAll(toggleOn);
+        c.toggleOffKeys.clear();
+        c.toggleOffKeys.addAll(toggleOff);
         reloadControlIcon(c);
         set.controls.add(c);
         return c;
@@ -360,11 +365,8 @@ public class TouchControls extends View {
         return null;
     }
 
-    /** makes a set the one in use (without letting go of the old one's
-     *  inputs: useSet does) */
     private void pointAt(int index) {
         ControlSet set = sets[index];
-
         activeSet = index;
         controls = set.controls;
         stick = set.stick;
@@ -455,7 +457,6 @@ public class TouchControls extends View {
             }
         }
 
-        // files/menu_ok.png (this set's own) before files/ok.png
         Drawable autoExt = loadExternalDrawable(c.setId + "_" + c.id + ".png");
         if (autoExt == null) autoExt = loadExternalDrawable(c.id + ".png");
         if (autoExt != null) {
@@ -463,7 +464,6 @@ public class TouchControls extends View {
             return;
         }
 
-        // the app's tc_ic_menu_ok before tc_ic_ok
         String pkg = getContext().getPackageName();
         int resId = getContext().getResources().getIdentifier(ICON_PREFIX + c.setId + "_" + c.id, "drawable", pkg);
         if (resId == 0) resId = getContext().getResources().getIdentifier(ICON_PREFIX + c.id, "drawable", pkg);
@@ -484,7 +484,6 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    /** a control of the set in use (the one edited, in the editor) */
     public Control byId(String id) {
         for (Control c : controls) {
             if (c.id.equals(id)) return c;
@@ -506,7 +505,6 @@ public class TouchControls extends View {
         dragging = null;
         select(null);
         if (on) {
-            // the editor opens on the set that is showing
             editSet = activeSet;
         } else {
             save();
@@ -516,10 +514,8 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    /** the set the editor is on */
     public int editingSet() { return editSet; }
 
-    /** the editor's tabs: another set's controls to edit */
     public void setEditingSet(int set) {
         if (!editMode || set < 0 || set >= SET_COUNT || set == editSet) return;
         save();
@@ -559,6 +555,17 @@ public class TouchControls extends View {
     public String selectedIconFile() { return selected != null && selected.customIconFile != null ? selected.customIconFile : ""; }
     public boolean selectedOnlySkippable() { return selected != null && selected.onlyWhenSkippable; }
 
+    public float selectedControlOpacity() {
+        if (selected == null) return opacity;
+        return selected.opacity < 0 ? opacity : selected.opacity;
+    }
+
+    public void setSelectedControlOpacity(float val) {
+        if (selected == null) return;
+        selected.opacity = Math.max(OPACITY_MIN, Math.min(OPACITY_MAX, val));
+        invalidate();
+    }
+
     public void setSelectedOnlySkippable(boolean on) {
         if (selected == null || selected.locked) return;
         selected.onlyWhenSkippable = on;
@@ -584,24 +591,29 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    public void setSelectedKey(String stateType, int key) {
-        if (selected == null || selected.locked) return;
+    public List<Integer> getSelectedKeys(String stateType) {
+        if (selected == null) return Collections.emptyList();
         switch (stateType) {
-            case "press": selected.pressKey = key; break;
-            case "long": selected.longPressKey = key; break;
-            case "toggle_on": selected.toggleOnKey = key; break;
-            case "toggle_off": selected.toggleOffKey = key; break;
+            case "press": return selected.pressKeys;
+            case "long": return selected.longPressKeys;
+            case "toggle_on": return selected.toggleOnKeys;
+            case "toggle_off": return selected.toggleOffKeys;
+            default: return Collections.emptyList();
         }
     }
 
-    public int getSelectedKey(String stateType) {
-        if (selected == null) return NONE;
+    public void setSelectedKeys(String stateType, List<Integer> keys) {
+        if (selected == null || selected.locked) return;
+        List<Integer> target = null;
         switch (stateType) {
-            case "press": return selected.pressKey;
-            case "long": return selected.longPressKey;
-            case "toggle_on": return selected.toggleOnKey;
-            case "toggle_off": return selected.toggleOffKey;
-            default: return NONE;
+            case "press": target = selected.pressKeys; break;
+            case "long": target = selected.longPressKeys; break;
+            case "toggle_on": target = selected.toggleOnKeys; break;
+            case "toggle_off": target = selected.toggleOffKeys; break;
+        }
+        if (target != null) {
+            target.clear();
+            if (keys != null) target.addAll(keys);
         }
     }
 
@@ -633,7 +645,7 @@ public class TouchControls extends View {
 
     public Control addNewButtonWithId(String id, String label) {
         if (id == null || id.trim().isEmpty() || !isIdAvailable(id)) return null;
-        Control c = new Control(id, label, label, TYPE_BUTTON, KeyEvent.KEYCODE_BUTTON_A,
+        Control c = new Control(id, label, label, TYPE_BUTTON, KeyEvent.KEYCODE_SPACE,
                 BR, 120, 120, 1.0f, 28, true, false, true);
         c.setId = sets[activeSet].id;
         reloadControlIcon(c);
@@ -681,7 +693,6 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    /** one set's controls back to the defaults */
     public void resetSet(int index) {
         if (index < 0 || index >= SET_COUNT) return;
         releaseAll();
@@ -695,7 +706,6 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    /** every set's controls and the settings back to the defaults */
     public void resetLayout() {
         releaseAll();
         select(null);
@@ -712,10 +722,34 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    // ---------- INI Storage with Documentation Header ----------
-
     private File getConfigFile() {
         return new File(getExternalFilesDirectory(), "android_controls.ini");
+    }
+
+    private static String serializeKeys(List<Integer> list) {
+        if (list == null || list.isEmpty()) return "0";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append(list.get(i));
+        }
+        return sb.toString();
+    }
+
+    private static List<Integer> parseKeys(String s, int fallback) {
+        List<Integer> list = new ArrayList<>();
+        if (s == null || s.trim().isEmpty()) {
+            if (fallback != NONE) list.add(fallback);
+            return list;
+        }
+        String[] parts = s.split(",");
+        for (String p : parts) {
+            try {
+                int k = Integer.parseInt(p.trim());
+                if (k != NONE) list.add(k);
+            } catch (NumberFormatException ignored) {}
+        }
+        return list;
     }
 
     public void save() {
@@ -748,27 +782,20 @@ public class TouchControls extends View {
             writer.println("# [set.control_id]   (for example [menu.ok])");
             writer.println("#   dx, dy           : Float (dp). Distance offsets relative to anchor corners.");
             writer.println("#   scale            : Float (0.6 to 2.0). Size scaling factor.");
+            writer.println("#   opacity          : Float (0.25 to 1.0). Control opacity (-1 = use master).");
             writer.println("#   visible          : Boolean (true/false). Control visibility.");
             writer.println("#   only_when_skippable : Boolean. Shown only while the cutscene can be skipped.");
             writer.println("#   mode             : Interaction behavior mode:");
             writer.println("#                        0 = MODE_STANDARD (fires press_key on touch down/up)");
             writer.println("#                        1 = MODE_TAP_AND_HOLD (tap triggers press_key, hold triggers long_key)");
             writer.println("#                        2 = MODE_TOGGLE (touch toggles between toggle_on_key and toggle_off_key)");
-            writer.println("#   press_key        : Android KeyEvent code (-1 = Fire/Left-Click, -2 = Edit, 0 = None).");
-            writer.println("#   long_key         : Key code triggered on hold (mode 1 only).");
-            writer.println("#   toggle_on_key    : Key code triggered when toggled active (mode 2 only).");
-            writer.println("#   toggle_off_key   : Key code triggered when toggled inactive (mode 2 only).");
+            writer.println("#   press_key        : Keycode or comma-separated list of keycodes fired sequentially.");
+            writer.println("#   long_key         : Keycode or comma-separated list fired on hold.");
+            writer.println("#   toggle_on_key    : Keycode or comma-separated list fired on toggle ON.");
+            writer.println("#   toggle_off_key   : Keycode or comma-separated list fired on toggle OFF.");
             writer.println("#   label            : String text rendered on button plate if no icon is specified.");
             writer.println("#   icon_file        : Custom image filename in files/ or files/icons/ (or stick base).");
             writer.println("#   knob_file        : Custom stick knob image in files/ or files/icons/ ([game.stick] only).");
-            writer.println("#");
-            writer.println("# Icons: without icon_file, a control looks for files/[set]_[id].png (for");
-            writer.println("# example menu_ok.png), then files/[id].png, then the app's drawables");
-            writer.println("# tc_ic_[set]_[id] and tc_ic_[id]. Without one it shows its label.");
-            writer.println("#");
-            writer.println("# Keys sent by the buttons: W A S D move, arrows (DPAD_*) the D-pad, Space/Enter");
-            writer.println("# A, F B, E X, Tab Y, Q white, X black, C left stick click, Z right stick");
-            writer.println("# click, G left trigger, Esc start, F1 back, -1 right trigger.");
             writer.println("# ==========================================================================\n");
 
             writer.println("[General]");
@@ -800,13 +827,16 @@ public class TouchControls extends View {
                     writer.println("dx=" + c.dx);
                     writer.println("dy=" + c.dy);
                     writer.println("scale=" + c.scale);
+                    if (c.opacity >= 0) {
+                        writer.println("opacity=" + c.opacity);
+                    }
                     writer.println("visible=" + c.visible);
                     writer.println("only_when_skippable=" + c.onlyWhenSkippable);
                     writer.println("mode=" + c.behaviorMode);
-                    writer.println("press_key=" + c.pressKey);
-                    writer.println("long_key=" + c.longPressKey);
-                    writer.println("toggle_on_key=" + c.toggleOnKey);
-                    writer.println("toggle_off_key=" + c.toggleOffKey);
+                    writer.println("press_key=" + serializeKeys(c.pressKeys));
+                    writer.println("long_key=" + serializeKeys(c.longPressKeys));
+                    writer.println("toggle_on_key=" + serializeKeys(c.toggleOnKeys));
+                    writer.println("toggle_off_key=" + serializeKeys(c.toggleOffKeys));
                     writer.println("label=" + c.label);
                     writer.println("icon_file=" + (c.customIconFile != null ? c.customIconFile : ""));
                     if (c.type == TYPE_STICK) {
@@ -876,8 +906,6 @@ public class TouchControls extends View {
         }
 
         if (version < 2) {
-            // a file from before the sets: its controls are the game's (the
-            // sections are named by id, the lists are in [General])
             loadSet(sets[SET_GAME], ini, "", gen);
         } else {
             for (ControlSet set : sets) {
@@ -886,8 +914,6 @@ public class TouchControls extends View {
         }
     }
 
-    /** one set from the file: prefix names its control sections, lists is
-     *  the section with its custom_ids and active_controls */
     private void loadSet(ControlSet set, Map<String, Map<String, String>> ini, String prefix,
                          Map<String, String> lists) {
         Set<String> activeIdsSet = null;
@@ -934,13 +960,30 @@ public class TouchControls extends View {
             c.dx = parseFloat(sec.get("dx"), c.dx);
             c.dy = parseFloat(sec.get("dy"), c.dy);
             c.scale = Math.max(SIZE_MIN, Math.min(SIZE_MAX, parseFloat(sec.get("scale"), c.scale)));
+            if (sec.containsKey("opacity")) {
+                c.opacity = Math.max(OPACITY_MIN, Math.min(OPACITY_MAX, parseFloat(sec.get("opacity"), -1f)));
+            }
             c.visible = c.locked || parseBoolean(sec.get("visible"), c.visible);
             c.onlyWhenSkippable = parseBoolean(sec.get("only_when_skippable"), c.onlyWhenSkippable);
             c.behaviorMode = parseInt(sec.get("mode"), c.behaviorMode);
-            c.pressKey = parseInt(sec.get("press_key"), c.pressKey);
-            c.longPressKey = parseInt(sec.get("long_key"), c.longPressKey);
-            c.toggleOnKey = parseInt(sec.get("toggle_on_key"), c.toggleOnKey);
-            c.toggleOffKey = parseInt(sec.get("toggle_off_key"), c.toggleOffKey);
+
+            if (sec.containsKey("press_key")) {
+                c.pressKeys.clear();
+                c.pressKeys.addAll(parseKeys(sec.get("press_key"), NONE));
+            }
+            if (sec.containsKey("long_key")) {
+                c.longPressKeys.clear();
+                c.longPressKeys.addAll(parseKeys(sec.get("long_key"), NONE));
+            }
+            if (sec.containsKey("toggle_on_key")) {
+                c.toggleOnKeys.clear();
+                c.toggleOnKeys.addAll(parseKeys(sec.get("toggle_on_key"), NONE));
+            }
+            if (sec.containsKey("toggle_off_key")) {
+                c.toggleOffKeys.clear();
+                c.toggleOffKeys.addAll(parseKeys(sec.get("toggle_off_key"), NONE));
+            }
+
             if (sec.containsKey("label")) {
                 c.label = sec.get("label");
                 if (c.custom) c.name = c.label;
@@ -953,8 +996,6 @@ public class TouchControls extends View {
             }
         }
     }
-
-    // ---------- what the game is doing
 
     @Override
     protected void onAttachedToWindow() {
@@ -971,33 +1012,27 @@ public class TouchControls extends View {
             return;
         situation = next;
         skippable = skip;
-        // a map loading: let go of everything, there is nothing to touch
         if (next == GameState.NONE)
             releaseAll();
         syncSet();
         invalidate();
     }
 
-    /** the set the game's state calls for */
     private int setForSituation() {
         switch (situation) {
             case GameState.MENUS:    return SET_MENU;
             case GameState.CUTSCENE: return SET_CUTSCENE;
             case GameState.GAMEPLAY: return SET_GAME;
-            default:                 return activeSet;   // loading: as it was
+            default:                 return activeSet;
         }
     }
 
-    /** puts the right set in use: the editor's, or the game's state's */
     private void syncSet() {
         int want = editMode ? editSet : setForSituation();
-
         if (want != activeSet)
             useSet(want);
     }
 
-    /** another set in use: the old one's inputs are let go of, the new one
-     *  fades in */
     private void useSet(int index) {
         releaseAll();
         pointAt(index);
@@ -1006,8 +1041,6 @@ public class TouchControls extends View {
         invalidate();
     }
 
-    /** a control that shows in play: not hidden, and not a SKIP that has
-     *  nothing to skip */
     private boolean shown(Control c) {
         return c.visible && (!c.onlyWhenSkippable || skippable);
     }
@@ -1065,7 +1098,7 @@ public class TouchControls extends View {
         if (!controlsEnabled) {
             if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 Control c = hit(e.getX(), e.getY(), false);
-                if (c != null && c.pressKey == EDIT) {
+                if (c != null && isEditControl(c)) {
                     pointerDown(e.getPointerId(0), e.getX(), e.getY(), e.getEventTime());
                     return true;
                 }
@@ -1103,9 +1136,12 @@ public class TouchControls extends View {
         return true;
     }
 
+    private static boolean isEditControl(Control c) {
+        return c.pressKeys.contains(EDIT) || "edit".equals(c.id);
+    }
+
     private void pointerDown(int id, float x, float y, long time) {
         if (id >= MAX_POINTERS) return;
-        // a set that has not faded in has nothing to press
         if (!editMode && uiAlpha < 0.5f) return;
         lastX[id] = x;
         lastY[id] = y;
@@ -1148,7 +1184,7 @@ public class TouchControls extends View {
 
     private boolean aimsWithButton(int id) {
         for (Control c : controls) {
-            if (c.pointer == id && (c.pressKey == FIRE || c.longPressKey == FIRE)) return true;
+            if (c.pointer == id && (c.pressKeys.contains(FIRE) || c.longPressKeys.contains(FIRE))) return true;
         }
         return false;
     }
@@ -1176,8 +1212,36 @@ public class TouchControls extends View {
         if (haptics) performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
     }
 
+    private void cancelSequences(Control c) {
+        for (Runnable r : c.activeSequenceRunnables) {
+            mainHandler.removeCallbacks(r);
+        }
+        c.activeSequenceRunnables.clear();
+    }
+
+    private void executeKeySequence(final Control c, final List<Integer> keys) {
+        cancelSequences(c);
+        if (keys == null || keys.isEmpty()) return;
+
+        long delay = 0;
+        for (int i = 0; i < keys.size(); i++) {
+            final int key = keys.get(i);
+            Runnable downTask = () -> sendKeyEvent(key, true);
+            Runnable upTask = () -> sendKeyEvent(key, false);
+
+            c.activeSequenceRunnables.add(downTask);
+            c.activeSequenceRunnables.add(upTask);
+
+            mainHandler.postDelayed(downTask, delay);
+            mainHandler.postDelayed(upTask, delay + MIN_HOLD_MS);
+
+            delay += MIN_HOLD_MS + SEQ_STEP_DELAY_MS;
+        }
+        tick();
+    }
+
     private void press(Control c) {
-        if (c.pressKey == EDIT) {
+        if (isEditControl(c)) {
             editHoldStart = SystemClock.uptimeMillis();
             postDelayed(openEditor, EDIT_HOLD_MS);
             return;
@@ -1186,13 +1250,22 @@ public class TouchControls extends View {
         if (c.behaviorMode == MODE_TOGGLE) {
             c.toggledState = !c.toggledState;
             if (c.toggledState) {
-                sendKeyEvent(c.toggleOffKey, false);
-                sendKeyEvent(c.toggleOnKey, true);
+                if (c.toggleOffKeys.size() == 1) sendKeyEvent(c.toggleOffKeys.get(0), false);
+                if (c.toggleOnKeys.size() > 1) {
+                    executeKeySequence(c, c.toggleOnKeys);
+                } else if (c.toggleOnKeys.size() == 1) {
+                    sendKeyEvent(c.toggleOnKeys.get(0), true);
+                    tick();
+                }
             } else {
-                sendKeyEvent(c.toggleOnKey, false);
-                sendKeyEvent(c.toggleOffKey, true);
+                if (c.toggleOnKeys.size() == 1) sendKeyEvent(c.toggleOnKeys.get(0), false);
+                if (c.toggleOffKeys.size() > 1) {
+                    executeKeySequence(c, c.toggleOffKeys);
+                } else if (c.toggleOffKeys.size() == 1) {
+                    sendKeyEvent(c.toggleOffKeys.get(0), true);
+                    tick();
+                }
             }
-            tick();
             return;
         }
 
@@ -1200,8 +1273,12 @@ public class TouchControls extends View {
             c.longPressTriggered = false;
             c.pendingLongPress = () -> {
                 c.longPressTriggered = true;
-                sendKeyEvent(c.longPressKey, true);
-                tick();
+                if (c.longPressKeys.size() > 1) {
+                    executeKeySequence(c, c.longPressKeys);
+                } else if (c.longPressKeys.size() == 1) {
+                    sendKeyEvent(c.longPressKeys.get(0), true);
+                    tick();
+                }
             };
             mainHandler.postDelayed(c.pendingLongPress, LONG_PRESS_TIMEOUT_MS);
             return;
@@ -1209,11 +1286,15 @@ public class TouchControls extends View {
 
         flushRelease(c);
         c.downAt = SystemClock.uptimeMillis();
-        sendKeyEvent(c.pressKey, true);
-        tick();
+
+        if (c.pressKeys.size() > 1) {
+            executeKeySequence(c, c.pressKeys);
+        } else if (c.pressKeys.size() == 1) {
+            sendKeyEvent(c.pressKeys.get(0), true);
+            tick();
+        }
     }
 
-    /** a delayed key-up that has not happened yet, now */
     private void flushRelease(Control c) {
         if (c.pendingRelease != null) {
             mainHandler.removeCallbacks(c.pendingRelease);
@@ -1228,7 +1309,7 @@ public class TouchControls extends View {
             endStick();
             return;
         }
-        if (c.pressKey == EDIT) {
+        if (isEditControl(c)) {
             removeCallbacks(openEditor);
             editHoldStart = 0;
             return;
@@ -1243,31 +1324,38 @@ public class TouchControls extends View {
                 c.pendingLongPress = null;
             }
             if (c.longPressTriggered) {
-                sendKeyEvent(c.longPressKey, false);
+                if (c.longPressKeys.size() == 1) {
+                    sendKeyEvent(c.longPressKeys.get(0), false);
+                }
                 c.longPressTriggered = false;
             } else {
-                sendKeyEvent(c.pressKey, true);
-                tick();
-                mainHandler.postDelayed(() -> sendKeyEvent(c.pressKey, false), 50);
+                if (c.pressKeys.size() > 1) {
+                    executeKeySequence(c, c.pressKeys);
+                } else if (c.pressKeys.size() == 1) {
+                    final int key = c.pressKeys.get(0);
+                    sendKeyEvent(key, true);
+                    tick();
+                    mainHandler.postDelayed(() -> sendKeyEvent(key, false), 50);
+                }
             }
             return;
         }
 
-        // held at least MIN_HOLD_MS, so that the game sees the tap
-        long held = SystemClock.uptimeMillis() - c.downAt;
-        final int key = c.pressKey;
+        if (c.pressKeys.size() > 1) return;
 
-        if (held >= MIN_HOLD_MS) {
-            sendKeyEvent(key, false);
-        } else {
-            c.pendingRelease = new Runnable() {
-                @Override
-                public void run() {
+        if (c.pressKeys.size() == 1) {
+            long held = SystemClock.uptimeMillis() - c.downAt;
+            final int key = c.pressKeys.get(0);
+
+            if (held >= MIN_HOLD_MS) {
+                sendKeyEvent(key, false);
+            } else {
+                c.pendingRelease = () -> {
                     c.pendingRelease = null;
                     sendKeyEvent(key, false);
-                }
-            };
-            mainHandler.postDelayed(c.pendingRelease, MIN_HOLD_MS - held);
+                };
+                mainHandler.postDelayed(c.pendingRelease, MIN_HOLD_MS - held);
+            }
         }
     }
 
@@ -1279,7 +1367,7 @@ public class TouchControls extends View {
                 SDLActivity.onNativeMouse(MotionEvent.BUTTON_PRIMARY, MotionEvent.ACTION_DOWN, 0f, 0f, true);
             } else {
                 for (Control other : controls) {
-                    if (other.pressKey == FIRE || other.longPressKey == FIRE || other.toggleOnKey == FIRE) {
+                    if (other.pressKeys.contains(FIRE) || other.longPressKeys.contains(FIRE) || other.toggleOnKeys.contains(FIRE)) {
                         if (other.pointer >= 0 || (other.behaviorMode == MODE_TOGGLE && other.toggledState))
                             return;
                     }
@@ -1358,6 +1446,7 @@ public class TouchControls extends View {
     private void releaseAll() {
         for (Control c : controls) {
             flushRelease(c);
+            cancelSequences(c);
             if (c.pendingLongPress != null) {
                 mainHandler.removeCallbacks(c.pendingLongPress);
                 c.pendingLongPress = null;
@@ -1368,8 +1457,8 @@ public class TouchControls extends View {
             }
             if (c.behaviorMode == MODE_TOGGLE && c.toggledState) {
                 c.toggledState = false;
-                sendKeyEvent(c.toggleOnKey, false);
-                sendKeyEvent(c.toggleOffKey, false);
+                for (int k : c.toggleOnKeys) sendKeyEvent(k, false);
+                for (int k : c.toggleOffKeys) sendKeyEvent(k, false);
             }
         }
         lookPointer = -1;
@@ -1441,7 +1530,6 @@ public class TouchControls extends View {
         boolean animating = editHoldStart != 0;
         lastFrame = now;
 
-        // a set fades in when it comes up; nothing shows while a map loads
         float fade = (lastFade == 0 ? 16f : Math.min(50f, now - lastFade)) / FADE_MS;
         float uiTarget = (editMode || situation != GameState.NONE) ? 1f : 0f;
 
@@ -1486,6 +1574,10 @@ public class TouchControls extends View {
         return Math.max(target, value - step);
     }
 
+    private float getEffectiveOpacity(Control c) {
+        return c.opacity < 0 ? opacity : c.opacity;
+    }
+
     private boolean drawStick(Canvas canvas, float step) {
         boolean held = stick.pointer >= 0;
         float target = held ? 1f : 0f;
@@ -1494,7 +1586,8 @@ public class TouchControls extends View {
         float r = stick.r;
 
         stickGlow = approach(stickGlow, target, step);
-        float alpha = (editMode ? (stick.visible ? 0.9f : 0.35f) : opacity * (0.45f + 0.55f * stickGlow)) * uiAlpha;
+        float stickOp = getEffectiveOpacity(stick);
+        float alpha = (editMode ? (stick.visible ? 0.9f : 0.35f) : stickOp * (0.45f + 0.55f * stickGlow)) * uiAlpha;
 
         if (stickBase != null) {
             stickBase.setBounds((int) (cx - r), (int) (cy - r), (int) (cx + r), (int) (cy + r));
@@ -1512,7 +1605,6 @@ public class TouchControls extends View {
             knob.draw(canvas);
         }
 
-        // Only draw the "MOVE" label text if no drawables are set for the stick
         if (stickBase == null && knob == null) {
             drawLabel(canvas, stick.label != null ? stick.label : "", cx, cy, kr * 1.4f, alpha, false);
         }
@@ -1523,8 +1615,9 @@ public class TouchControls extends View {
     private void drawButton(Canvas canvas, Control c) {
         float scale = 1f - 0.10f * c.press;
         float r = c.r * scale;
+        float btnOp = getEffectiveOpacity(c);
         float alpha = (editMode ? (c.visible ? 0.9f : 0.35f)
-                                : opacity * (0.8f + 0.2f * c.press)) * uiAlpha;
+                                : btnOp * (0.8f + 0.2f * c.press)) * uiAlpha;
 
         if (c.icon != null) {
             c.icon.setBounds((int) (c.cx - r), (int) (c.cy - r), (int) (c.cx + r), (int) (c.cy + r));
