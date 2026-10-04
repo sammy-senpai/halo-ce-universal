@@ -5837,6 +5837,48 @@ static boolean ui_mouse_menus_active(
 	return virtual_keyboard_active() || ui_mouse_menu() != NULL || game_engine_showing_postgame();
 }
 
+/* what the game is doing (port/linux/include/halo_game_state.h) */
+static unsigned int ui_game_state_flags(
+	void)
+{
+	unsigned int flags = 0;
+
+	if (widget_globals.initialization_thread || progress_bar_is_active())
+		return HALO_GAME_STATE_LOADING;
+	if (virtual_keyboard_active())
+		flags |= HALO_GAME_STATE_KEYBOARD;
+	if (ui_mouse_menu() != NULL)
+		flags |= HALO_GAME_STATE_MENU;
+	if (game_in_progress() && !we_are_at_the_main_menu)
+	{
+		flags |= HALO_GAME_STATE_IN_GAME;
+		if (game_time_get_paused())
+			flags |= HALO_GAME_STATE_PAUSED;
+		if (cinematic_globals && cinematic_in_progress())
+		{
+			flags |= HALO_GAME_STATE_CINEMATIC;
+			if (cinematic_can_be_skipped())
+				flags |= HALO_GAME_STATE_SKIPPABLE;
+		}
+	}
+
+	return flags;
+}
+
+/* passed on to the app when it changes */
+static void ui_widgets_publish_game_state(
+	void)
+{
+	static unsigned int published = 0xffffffffu;
+	unsigned int flags = ui_game_state_flags();
+
+	if (flags != published)
+	{
+		published = flags;
+		halo_game_state_update(flags);
+	}
+}
+
 /* the pointer's motion, clicks and wheel since the last frame, as the first
 player's controller events */
 /* port: a row of a list to choose from (the PC version's menus' lists of
@@ -7313,6 +7355,7 @@ void process_ui_widgets(
 		widget_globals.initialized);
 	widget_globals.current_system_milliseconds = system_milliseconds();
 	ui_widgets_process_mouse();
+	ui_widgets_publish_game_state();
 	if (ui_widget_port_press_controller != NONE)
 	{
 		event_manager_post_button(ui_widget_port_press_controller, ui_widget_port_press_button);
